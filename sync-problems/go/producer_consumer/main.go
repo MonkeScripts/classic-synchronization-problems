@@ -1,34 +1,48 @@
-// Producer-Consumer — starter template (Go)
+// Producer-Consumer — Go, channel variant
 //
-// In Go, "bounded buffer" is literally `make(chan T, N)`. If you jump
-// straight to that, you skip the learning. So:
+// Run with the race detector during development:
+//     go run -race ./producer_consumer
 //
-//   Version 1 (this file): mutex + *sync.Cond + container/list. This is
-//       the shape C++/Rust/Java developers write and is what the lecture
-//       pseudocode (wait(notFull)/signal(notEmpty)) translates to.
+// In Go, a buffered channel IS a bounded buffer. Full stop. There is no
+// BoundedBuffer struct here, no mutex, no condvar. The whole "notFull /
+// notEmpty" dance from the C++ version is replaced by ONE declaration:
 //
-//   Version 2 (second pass, REWRITE this file): `items := make(chan string,
-//       BufferSize)`. Producers do `items <- item`; consumers do
-//       `for item := range items { ... }`. Only the LAST producer closes.
-//       Compare line counts and reflect on what the channel hides.
+//     items := make(chan string, BufferSize)
 //
-//   Version 3 (stretch): lock-free MPMC queue. Big topic.
+// - `items <- x` blocks when the channel is full (equivalent to
+//   `wait(not_full)`).
+// - `<-items` blocks when the channel is empty (equivalent to
+//   `wait(not_empty)`).
+// - `close(items)` wakes every ranger/receiver and drains cleanly.
 //
-// Classic bugs to watch for while filling this in:
-//   - `if` instead of `for` around cv.Wait — spurious wakeups are a thing.
-//   - Signalling/broadcasting to the wrong condvar (send on notEmpty when
-//     you emptied a slot, not filled one).
-//   - Shutdown hangs: a consumer sleeping on notEmpty after the last
-//     producer closed — close() below broadcasts both cvs for this reason.
+// What's NOT free:
+//   1. Who calls `close()`? Only the SENDING side is allowed to close.
+//      With N producers, you need to coordinate so close happens exactly
+//      once, and only after the LAST producer is done.
+//      (Closing twice → panic. Sending on a closed channel → panic.)
+//   2. `for item := range ch` is the idiomatic consumer — exits cleanly
+//      when the channel is closed AND drained. No nullopt, no sentinel,
+//      no explicit "done" flag. This alone is worth writing the version
+//      for.
+//
+// The TODOs below walk you through those two points.
+//
+// Second-pass variants worth writing:
+//   A. Balk-on-full: use `select { case items <- x: ...; default: ... }`
+//      so producers drop items instead of blocking (turn this into a
+//      best-effort log shipper).
+//   B. Cancellation: add a `ctx context.Context` or `done chan struct{}`
+//      and use `select` in both producer and consumer so shutdown can be
+//      triggered externally, not just by "all producers finished."
+//   C. Multi-stage pipeline: chain two channel-based stages to feel how
+//      Go composes ("URLs → fetch → parsed pages → index").
 
 package main
 
 import (
-	"container/list"
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
@@ -38,102 +52,93 @@ const (
 	ItemsPerProducer = 50
 )
 
-type BoundedBuffer struct {
-	mu       sync.Mutex
-	notFull  *sync.Cond
-	notEmpty *sync.Cond
-	q        *list.List
-	capacity int
-	closed   bool
-}
-
-func NewBoundedBuffer(capacity int) *BoundedBuffer {
-	b := &BoundedBuffer{q: list.New(), capacity: capacity}
-	b.notFull = sync.NewCond(&b.mu)
-	b.notEmpty = sync.NewCond(&b.mu)
-	return b
-}
-
-// Push blocks while the buffer is full. Returns false if the buffer was
-// closed before space became available (item was NOT inserted).
-func (b *BoundedBuffer) Push(item string) bool {
-	// ================================================================
-	// TODO:
-	//   - b.mu.Lock(); defer b.mu.Unlock()
-	//   - for b.q.Len() == b.capacity && !b.closed { b.notFull.Wait() }
-	//   - if b.closed: return false
-	//   - b.q.PushBack(item)
-	//   - b.notEmpty.Signal()
-	//   - return true
-	// ================================================================
-	_ = item
-	return false
-}
-
-// Pop blocks while the buffer is empty. Returns ("", false) when the buffer
-// is closed AND drained — that's how consumers know to exit their loop.
-func (b *BoundedBuffer) Pop() (string, bool) {
-	// ================================================================
-	// TODO (mirror-image of Push):
-	//   - b.mu.Lock(); defer b.mu.Unlock()
-	//   - for b.q.Len() == 0 && !b.closed { b.notEmpty.Wait() }
-	//   - if b.q.Len() == 0 && b.closed: return "", false
-	//   - item := b.q.Front(); b.q.Remove(item)
-	//   - b.notFull.Signal()
-	//   - return item.Value.(string), true
-	// ================================================================
-	return "", false
-}
-
-// Close is the boilerplate part — you don't need to change this.
-// It wakes every waiter on both condition variables so nobody is stuck
-// sleeping after the producers are done.
-func (b *BoundedBuffer) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.closed = true
-	b.notFull.Broadcast()
-	b.notEmpty.Broadcast()
-}
-
 func main() {
-	buf := NewBoundedBuffer(BufferSize)
-	var produced, consumed, producersDone atomic.Int32
-	var pwg, cwg sync.WaitGroup
+	// ======================================================================
+	// The whole bounded buffer:
+	// ======================================================================
+	items := make(chan string, BufferSize)
 
+	var produced, consumed atomic.Int32
+	var pwg sync.WaitGroup // waits for producers
+	var cwg sync.WaitGroup // waits for consumers
+
+	// ----------------------------------------------------------------------
+	// Producers
+	// ----------------------------------------------------------------------
 	for p := 0; p < NumProducers; p++ {
 		pwg.Add(1)
 		go func(pid int) {
 			defer pwg.Done()
 			for i := 0; i < ItemsPerProducer; i++ {
-				if !buf.Push(fmt.Sprintf("P%d#%d", pid, i)) {
-					return
-				}
+				// TODO:
+				//   - build the item (e.g. "P%d#%d" of pid and i)
+				//   - send it on `items`  (this blocks when buffer full
+				//     — that IS the backpressure you wanted)
+				//   - bump produced counter
+				//   - small sleep to vary timing (optional but useful)
+
+				item := fmt.Sprintf("P%d#%d", pid, i)
+				items <- item
 				produced.Add(1)
-				time.Sleep(time.Duration(pid%3) * time.Millisecond)
-			}
-			// Only the last producer out closes the buffer.
-			if producersDone.Add(1) == int32(NumProducers) {
-				buf.Close()
+
 			}
 		}(p)
 	}
 
+	// ----------------------------------------------------------------------
+	// Close coordination
+	//
+	// The channel must be closed exactly once, AFTER the last producer is
+	// done, and BEFORE the consumers give up ranging. Only a sender is
+	// allowed to close. Closing twice panics.
+	//
+	// Idiomatic shape: one dedicated "closer" goroutine that waits for
+	// producers on pwg and then closes `items`. Do NOT put the close()
+	// inside any producer goroutine — none of them knows individually
+	// whether it is the last one without extra coordination.
+	//
+	// TODO: start a goroutine that:
+	//   - pwg.Wait()
+	//   - close(items)
+	// ----------------------------------------------------------------------
+
+	go func() {
+		pwg.Wait() // wait for producer to be done
+		// close the channel
+		close(items) // i forgot about this!
+	}()
+
+	// ----------------------------------------------------------------------
+	// Consumers
+	// ----------------------------------------------------------------------
 	for c := 0; c < NumConsumers; c++ {
 		cwg.Add(1)
 		go func(cid int) {
 			defer cwg.Done()
-			for {
-				item, ok := buf.Pop()
-				if !ok {
-					return
-				}
-				_ = item // pretend to flush
+			// TODO:
+			//   for item := range items {
+			//       _ = item
+			//       consumed.Add(1)
+			//       // small sleep if you want to simulate work
+			//   }
+			//
+			// The range-loop exits automatically when:
+			//   - the channel is closed, AND
+			//   - every buffered item has been drained.
+			// You do NOT need a "is closed" check, a nullopt, or a
+			// sentinel value. That's the whole point of this variant.
+			for range items {
 				consumed.Add(1)
 			}
+
 		}(c)
 	}
 
+	// Wait for consumers to finish draining the channel before we print.
+	// (Producers are waited on by the closer goroutine; but we still need
+	// to join them here too so their goroutines are fully torn down before
+	// the process exits — `pwg.Wait()` is safe to call from multiple
+	// places.)
 	pwg.Wait()
 	cwg.Wait()
 
