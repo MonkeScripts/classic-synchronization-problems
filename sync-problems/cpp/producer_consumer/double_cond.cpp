@@ -46,32 +46,34 @@ public:
     // Blocks until space is available OR the buffer is closed.
     // Returns false if closed (item was NOT inserted).
     bool push(T item) {
-        (void)item;
-        // ================================================================
-        // TODO:
-        //   - unique_lock on mut_
-        //   - wait on not_full_ while (queue is full AND !closed_)
-        //   - if closed_: return false
-        //   - push_back item
-        //   - unlock (or let destructor) and notify_one on not_empty_
-        //   - return true
-        // ================================================================
-        return false; // placeholder
+        std::unique_lock<std::mutex> lk{mut_};
+        // while in this mutex
+        // have a conditional var that checks if buffer is full
+        // if full, go back to sleep and relinquish mutex
+        // else, append to the buffer, notify consumer that new thing exists
+        not_full_.wait(lk, [this] {
+            return queue_.size() < capacity_ || closed_;
+        });
+        if (closed_) return false;
+//      queue_.push_back(item); — item is a local by-value param, you can move it: queue_.push_back(std::move(item));.                                                                                                                             
+        queue_.push_back(std::move(item));
+        not_empty_.notify_one();
+        return true;
     }
 
     // Blocks until an item is available. Returns nullopt if buffer is
     // closed AND empty — this is how consumers know to exit.
     std::optional<T> pop() {
-        // ================================================================
-        // TODO:
-        //   - unique_lock on mut_
-        //   - wait on not_empty_ while (queue is empty AND !closed_)
-        //   - if queue empty AND closed_: return nullopt
-        //   - pop front item
-        //   - notify_one on not_full_
-        //   - return item
-        // ================================================================
-        return std::nullopt; // placeholder
+        std::unique_lock<std::mutex> lk{mut_};
+        not_empty_.wait(lk, [this] {
+            return queue_.size() > 0 || closed_;
+        });
+        if (closed_ && queue_.empty()) return std::nullopt;
+        //  auto item = queue_.front(); copies the string, then pop_front() throws it away. You can move out: auto item = std::move(queue_.front()); queue_.pop_front();.     
+        auto item = std::move(queue_.front());
+        queue_.pop_front();
+        not_full_.notify_one();
+        return item;
     }
 
     // Call when no more producers will push. Wakes all waiters.

@@ -1,2 +1,5 @@
-add_executable(producer_consumer main.cpp)
-target_link_libraries(producer_consumer PRIVATE Threads::Threads)
+add_executable(producer_consumer_double_cond double_cond.cpp)
+target_link_libraries(producer_consumer_double_cond PRIVATE Threads::Threads)
+
+add_executable(producer_consumer_semaphore semaphore.cpp)
+target_link_libraries(producer_consumer_semaphore PRIVATE Threads::Threads)
