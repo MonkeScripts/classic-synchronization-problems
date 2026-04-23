@@ -1,0 +1,1 @@
+/home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/target/debug/dining_philosophers: /home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/dining_philosophers/src/main.rs

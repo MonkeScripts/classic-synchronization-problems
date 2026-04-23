@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "dining_philosophers",
+    "barrier",
+    "barbershop",
+    "producer_consumer",
+    "readers_writers",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+
+[profile.release]
+debug = true  # keep symbols for sanitizer output

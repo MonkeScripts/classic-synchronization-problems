@@ -1,0 +1,1 @@
+/home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/target/debug/readers_writers: /home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/readers_writers/src/main.rs

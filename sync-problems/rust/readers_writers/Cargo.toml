@@ -1,0 +1,11 @@
+[package]
+name = "readers_writers"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+rand = "0.8"
+
+[[bin]]
+name = "readers_writers"
+path = "src/main.rs"

@@ -1,0 +1,1 @@
+/home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/target/debug/barbershop: /home/monkescripts/Documents/NUS/Y4S2/CS3211/classic_sync_problems/sync-problems/rust/barbershop/src/main.rs

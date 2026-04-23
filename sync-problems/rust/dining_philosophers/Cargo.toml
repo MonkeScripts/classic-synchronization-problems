@@ -1,0 +1,11 @@
+[package]
+name = "dining_philosophers"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+rand = "0.8"
+
+[[bin]]
+name = "dining_philosophers"
+path = "src/main.rs"
