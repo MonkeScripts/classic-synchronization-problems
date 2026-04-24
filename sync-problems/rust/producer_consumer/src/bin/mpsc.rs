@@ -72,8 +72,57 @@ fn main() {
     //
     //   6. Join everyone, then keep the print + asserts below.
     // ====================================================================
+    let mut prod_handles = Vec::new();  
+    let (tx, rx) = sync_channel::<String>(BUFFER_SIZE);
+    for pid in 0..NUM_PRODUCERS {
+        let tx_clone = tx.clone();
+        let produced_clone = Arc::clone(&produced);
+        prod_handles.push(thread::spawn(move || {
+            for i in 0..ITEMS_PER_PRODUCER {
+                let item = format!("P{}#{}", pid, i);
+                tx_clone.send(item).unwrap();
+                produced_clone.fetch_add(1, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis((pid as u64) % 3));                                                                                                                                             
+            }
+    }));
+    }
+    drop(tx);
 
-    
+    // This works but we have sidestepped the exercise
+    // while let Ok(msg) = rx.recv() {
+    //     println!("{msg}");
+    //     consumed.fetch_add(1, Ordering::SeqCst);
+
+    // }   
+    let mut cons_handles = Vec::new();  
+    let recv_lock = Arc::new(Mutex::new(rx));
+    for _ in 0..NUM_CONSUMERS {
+        let consumed_clone = Arc::clone(&consumed);
+        let recv_lock_clone = Arc::clone(&recv_lock);
+        cons_handles.push(thread::spawn(move || {
+            loop{
+                let item = {
+                    let rx = recv_lock_clone.lock().unwrap();
+                    rx.recv()
+                };
+                match item {
+                    Ok(s) => {
+                        std::hint::black_box(s);
+                        consumed_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(_) => break,
+                }
+
+            }
+        }));
+    }
+
+    for h in prod_handles {
+        h.join().unwrap();
+    }
+    for h in cons_handles {
+        h.join().unwrap();
+    }
 
     let expected = (NUM_PRODUCERS as i32) * ITEMS_PER_PRODUCER;
     let p = produced.load(Ordering::SeqCst);
