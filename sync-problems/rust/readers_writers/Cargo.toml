@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 rand = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+async-trait = "0.1"
 
 [[bin]]
 name = "readers_writers"

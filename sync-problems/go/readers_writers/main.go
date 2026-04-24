@@ -109,20 +109,45 @@ func (c *KVCacheRW) Set(k, v string) {
 type KVCacheHandRolled struct {
 	data     map[string]string
 	counters Counters
+	bibo chan struct{}
+	emptyRoom chan struct{}
+	turnstile chan struct{}
+	rc int
+
+
 	// TODO: add your lock fields (mu, cond, counter, optional turnstile).
 }
 
 func NewKVCacheHandRolled() *KVCacheHandRolled {
-	return &KVCacheHandRolled{data: make(map[string]string)}
-	// TODO: initialize condvar(s) here once you've added them.
+	return &KVCacheHandRolled{
+		data: make(map[string]string),
+		bibo: make(chan struct{}, 1),
+		emptyRoom: make(chan struct{}, 1),
+		turnstile: make(chan struct{}, 1),
+	}
 }
 
 func (c *KVCacheHandRolled) Get(k string) string {
 	// TODO: "read lock" — first reader must block new writers; other readers
 	// pile on. Slide 10 lightswitch.lock(roomEmpty) pattern.
+	c.turnstile <- struct{}{}
+	<-c.turnstile
+	c.bibo <- struct{}{}
+	c.rc++
+	if c.rc == 1 {
+		c.emptyRoom <- struct{}{}
+	}
+	<-c.bibo
 	c.counters.EnterRead()
 	v := c.data[k]
 	c.counters.ExitRead()
+	c.bibo <- struct{}{}
+	c.rc--
+	if c.rc == 0 {
+		<-c.emptyRoom
+	}
+	<-c.bibo
+
 	// TODO: "read unlock" — last reader releases the writer block.
 	return v
 }
@@ -131,9 +156,15 @@ func (c *KVCacheHandRolled) Set(k, v string) {
 	// TODO: wait until roomEmpty, then take it exclusively.
 	// For the no-starve variant (slide 12): acquire a turnstile first so
 	// new readers queue up behind any waiting writer, then take roomEmpty.
+	c.turnstile <- struct{}{}
+	c.emptyRoom <- struct{}{}
 	c.counters.EnterWrite()
 	c.data[k] = v
 	c.counters.ExitWrite()
+	<-c.emptyRoom
+	<-c.turnstile
+
+
 	// TODO: release.
 }
 
@@ -171,5 +202,5 @@ func main() {
 	bench("RWMutex", NewKVCacheRW())
 
 	// TODO: once you've implemented KVCacheHandRolled, uncomment:
-	// bench("HandRolled", NewKVCacheHandRolled())
+	bench("HandRolled", NewKVCacheHandRolled())
 }
