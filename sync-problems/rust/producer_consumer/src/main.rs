@@ -62,11 +62,19 @@ impl<T> BoundedBuffer<T> {
         //   - notify_one on not_empty
         //   - Ok(())
         // ================================================================
-        let _ = &self.inner;
-        let _ = &self.not_full;
-        let _ = &self.not_empty;
-        let _ = self.capacity;
-        Err(item)
+        let mut inner = self.inner.lock().unwrap();
+        while !(inner.queue.len() < self.capacity || inner.closed) {
+            inner = self.not_full.wait(inner).unwrap();
+        }
+        if inner.closed {
+            Err(item)
+        }
+        else {
+            inner.queue.push_back(item);
+            self.not_empty.notify_one();
+            Ok(())
+        }
+
     }
 
     /// Returns None when closed AND empty — signals consumers to exit.
@@ -81,7 +89,23 @@ impl<T> BoundedBuffer<T> {
         //   - notify_one on not_full
         //   - Some(item)
         // ================================================================
-        None
+        let mut inner = self.inner.lock().unwrap();
+        while inner.queue.is_empty() && !inner.closed {
+            inner = self.not_empty.wait(inner).unwrap();
+        }
+        if inner.closed && inner.queue.is_empty() {
+            None
+        }
+        else {
+            //  inner.queue.pop_front() already returns Option<T>, which matches the function's return type, so item works. But   
+            // the TODO suggests let item = queue.pop_front().unwrap(); ... Some(item). That .unwrap() is a self-check: "by my own invariant, the queue 
+            // can't be empty at this point — crash if I'm wrong." Worth doing because if your wait predicate ever drifts, you'll find out loudly instead  
+            // of silently returning None. Optional.
+
+            let item = inner.queue.pop_front().unwrap();
+            self.not_full.notify_one();
+            Some(item)
+        }
     }
 
     pub fn close(&self) {

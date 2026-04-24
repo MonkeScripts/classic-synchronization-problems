@@ -1,2 +1,3 @@
 sync-problems/cpp/build
 sync-problems/cpp/build-tsan
+sync-problems/rust/target
