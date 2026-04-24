@@ -28,6 +28,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <semaphore>
 
 using namespace std::chrono_literals;
 
@@ -93,23 +94,109 @@ public:
     std::string get(const std::string& k) {
         // TODO: acquire read lock (lightswitch pattern — first reader blocks writers,
         //       last reader releases)
+        bibo_sem_.acquire();
+        ++rc_;
+        if (rc_ == 1) {
+            roomEmptySem_.acquire();
+        }
+        bibo_sem_.release();        
         counters_.enter_read();
         auto it = map_.find(k);
         std::string result = (it != map_.end()) ? it->second : "";
         counters_.exit_read();
+        bibo_sem_.acquire();
+        --rc_;
+        if (rc_ == 0) {
+            roomEmptySem_.release();
+        }
+        bibo_sem_.release();
         // TODO: release read lock
         return result;
     }
     void set(const std::string& k, const std::string& v) {
         // TODO: acquire write lock
+        roomEmptySem_.acquire();
         counters_.enter_write();
         map_[k] = v;
         counters_.exit_write();
+        roomEmptySem_.release();
         // TODO: release write lock
     }
     ActiveCounters counters_;
 private:
     // TODO: add mutex, counter, condition variable, roomEmpty flag, etc.
+    std::unordered_map<std::string, std::string> map_;
+    std::counting_semaphore<1> roomEmptySem_{1};
+    std::counting_semaphore<1> bibo_sem_{1};
+    std::atomic<int> rc_{0};
+
+};
+
+// ==========================================================================
+// Implementation #3: No-starve reader/writer via a turnstile (lecture slide 12).
+// ==========================================================================
+// Problem with #2: reader-preference. Under a steady reader load, `rc_` never
+// hits 0, so `roomEmptySem_` is never released, and writers wait forever.
+// You can see it yourself by setting NUM_READERS=50 / NUM_WRITERS=1 (and
+// optionally inserting a small sleep into the read critical section) and
+// measuring per-write wait time.
+//
+// Fix: add a THIRD semaphore — the `turnstile` — that every thread must pass
+// through before entering its acquisition path.
+//   - WRITERS hold the turnstile for the entire critical section, *including*
+//     the wait on roomEmpty. While a writer is queued or writing, the
+//     turnstile is held, so new readers arriving get stopped there.
+//   - READERS "gate through" the turnstile: acquire, then release immediately.
+//     No reader holds the turnstile for any non-trivial time. Once past the
+//     turnstile, readers follow the same Lightswitch pattern as #2.
+//
+// Consequence: once a writer is waiting on roomEmpty, no NEW readers can join
+// the readers currently in the room. Existing readers finish, `rc_` drops to 0,
+// the writer gets `roomEmpty`, writes, and releases the turnstile. Any readers
+// that arrived during that window gate through and resume.
+//
+// Fairness caveat: std::counting_semaphore does NOT guarantee FIFO wakeup
+// order — `release()` wakes *some* waiter, not necessarily the one that has
+// been waiting longest. Strict starve-freedom depends on the underlying
+// implementation's fairness (libstdc++/glibc uses futexes, which are
+// approximately fair in practice but not strictly FIFO). Treat this
+// implementation as "starve-free under reasonable fairness," which is enough
+// for the comparison the exercise is asking for.
+// ==========================================================================
+class KVCacheNoStarve {
+public:
+    std::string get(const std::string& k) {
+        turnstile_.acquire();
+        turnstile_.release();
+        bibo_sem_.acquire();
+        ++rc_;
+        if (rc_ == 1) roomEmptySem_.acquire();
+        bibo_sem_.release();
+        counters_.enter_read();
+        auto it = map_.find(k);
+        std::string result = (it != map_.end()) ? it->second : "";
+        counters_.exit_read();
+        bibo_sem_.acquire();
+        --rc_;
+        if (rc_ == 0) roomEmptySem_.release();
+        bibo_sem_.release();
+        return result;
+    }
+    void set(const std::string& k, const std::string& v) {
+        turnstile_.acquire();
+        roomEmptySem_.acquire();
+        counters_.enter_write();
+        map_[k] = v;
+        counters_.exit_write();
+        roomEmptySem_.release();
+        turnstile_.release();
+    }
+    ActiveCounters counters_;
+private:
+    std::counting_semaphore<1> turnstile_{1};
+    std::counting_semaphore<1> roomEmptySem_{1};
+    std::counting_semaphore<1> bibo_sem_{1};
+    int rc_ = 0;
     std::unordered_map<std::string, std::string> map_;
 };
 
@@ -150,4 +237,5 @@ void run_benchmark(const char* name) {
 int main() {
     run_benchmark<KVCacheShared>("shared_mutex ");
     run_benchmark<KVCacheHandRolled>("hand-rolled  ");
+    run_benchmark<KVCacheNoStarve>("no-starve    ");
 }
