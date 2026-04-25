@@ -23,6 +23,9 @@ dependencies = [
 [[package]]
 name = "barrier"
 version = "0.1.0"
+dependencies = [
+ "tokio",
+]
 
 [[package]]
 name = "cfg-if"

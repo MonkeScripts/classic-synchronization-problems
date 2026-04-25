@@ -4,3 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+# Used only by src/bin/tokio.rs (the preloaded-turnstile semaphore variant).
+# src/main.rs (cond + generation) does not need tokio.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }

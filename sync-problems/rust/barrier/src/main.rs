@@ -41,18 +41,19 @@ impl MyBarrier {
     }
 
     pub fn arrive_and_wait(&self) {
-        // TODO: implement. Hint:
-        //   - lock state
-        //   - remember `gen = state.generation`
-        //   - state.count += 1
-        //   - if state.count == expected:
-        //         state.count = 0
-        //         state.generation += 1
-        //         notify_all
-        //   - else: wait while state.generation == gen
-        let _ = &self.state;
-        let _ = &self.cv;
-        let _ = self.expected;
+        let mut state = self.state.lock().unwrap();
+        let gen = state.generation; //immutable reference
+        state.count += 1;
+        if state.count == self.expected {
+            state.count = 0;
+            state.generation += 1;
+            self.cv.notify_all();
+            return;
+        }
+        let _guard = self.cv.wait_while(state, |s| {
+            gen == s.generation
+        }).unwrap();
+
     }
 }
 

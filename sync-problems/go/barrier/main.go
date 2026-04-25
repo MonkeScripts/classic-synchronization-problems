@@ -38,14 +38,29 @@ const (
 // ==========================================================================
 type MyBarrier struct {
 	expected int
+	entry_wg *sync.WaitGroup
+	exit_wg *sync.WaitGroup
+	mu sync.Mutex
 	// TODO: fields you need — count, generation, mu sync.Mutex, cv *sync.Cond,
 	// or a chan struct{}, or two sync.WaitGroups, ...
 }
 
+
 func NewMyBarrier(expected int) *MyBarrier {
 	// TODO: initialize whatever fields your chosen strategy needs.
-	return &MyBarrier{expected: expected}
+	return &MyBarrier{
+		expected: expected,
+		entry_wg: freshWG(expected),
+		exit_wg: freshWG(expected),
+	}
+	
 }
+
+func freshWG(n int) *sync.WaitGroup {                                                                                                                                                               
+      wg := &sync.WaitGroup{}                                                                                                                                                                       
+      wg.Add(n)
+      return wg                                                                                                                                                                                       
+  }
 
 func (b *MyBarrier) ArriveAndWait() {
 	// TODO: block until `expected` goroutines have called ArriveAndWait,
@@ -62,7 +77,33 @@ func (b *MyBarrier) ArriveAndWait() {
 	//   - else:
 	//         for b.generation == gen { b.cv.Wait() }
 	//   - unlock
-	_ = b.expected
+	b.mu.Lock()
+	wg := b.entry_wg
+	b.mu.Unlock()
+	wg.Done()
+	wg.Wait()
+	
+	// refreshing mechanism
+	b.mu.Lock()
+	if b.entry_wg == wg {
+		b.entry_wg = freshWG(b.expected)
+	}
+	wg2 := b.exit_wg
+	b.mu.Unlock()
+
+	wg2.Done()
+	wg2.Wait()
+
+	// Refresh
+	b.mu.Lock()
+	if b.exit_wg == wg2 {
+		b.exit_wg = freshWG(b.expected)
+	}
+	b.mu.Unlock()
+
+
+
+
 }
 
 // --------------------------------------------------------------------------
