@@ -5,6 +5,9 @@ edition.workspace = true
 
 [dependencies]
 rand = "0.8"
+# Used only by src/bin/tokio.rs (the async multi-strategy variant).
+# src/main.rs (sync std) does not need tokio.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 
 [[bin]]
 name = "dining_philosophers"

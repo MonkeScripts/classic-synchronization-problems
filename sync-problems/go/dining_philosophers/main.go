@@ -44,6 +44,14 @@ type Shared struct {
 	// chopsticks [N]sync.Mutex
 	// Example (channel-based):
 	// chopsticks [N]chan struct{}
+	chopstickChs [N]chan struct{}
+}
+
+func (s *Shared) Init() {
+	for i := range s.chopstickChs {
+		s.chopstickChs[i] = make(chan struct{}, 1)
+		s.chopstickChs[i] <- struct{}{}
+	}
 }
 
 func (s *Shared) checkInvariant(pid int) {
@@ -65,6 +73,30 @@ func think(s *Shared, pid int) {
 	s.states[pid].Store(Thinking)
 	jitter(3)
 }
+func (s *Shared) getLeftChopstickCh(pid int) chan struct{} {
+	return s.chopstickChs[pid]
+	
+}
+func (s *Shared) getRightChopstickCh(pid int) chan struct{} {
+		return s.chopstickChs[(pid + 1) % N ]
+}
+
+func (s *Shared) getEvenIdxChopstickCh(pid int) chan struct{} {
+	if pid % 2 == 0 {
+		return s.getLeftChopstickCh(pid)
+	} else {
+		return s.getRightChopstickCh(pid)
+	}
+	
+}
+func (s *Shared) getOddIdxChopstickCh(pid int) chan struct{} {
+	if pid % 2 == 1 {
+		return s.getLeftChopstickCh(pid)
+	} else {
+		return s.getRightChopstickCh(pid)
+	}
+
+}
 
 func eat(s *Shared, pid int) {
 	s.states[pid].Store(Hungry)
@@ -72,6 +104,10 @@ func eat(s *Shared, pid int) {
 	// ======================================================================
 	// TODO: Acquire resources here.
 	// ======================================================================
+	evenIdxCh := s.getEvenIdxChopstickCh(pid)
+	oddIdxCh := s.getOddIdxChopstickCh(pid)
+	<- evenIdxCh
+	<- oddIdxCh
 
 	s.states[pid].Store(Eating)
 	s.checkInvariant(pid)
@@ -79,8 +115,102 @@ func eat(s *Shared, pid int) {
 	jitter(3)
 	s.states[pid].Store(Thinking)
 
+	evenIdxCh <- struct{}{}
+	oddIdxCh <- struct{}{}
+
 	// ======================================================================
 	// TODO: Release.
+	// ======================================================================
+}
+
+// =========================================================================
+// Strategy: try-and-back-off (channel equivalent of C++ std::scoped_lock)
+// =========================================================================
+// Block on one chopstick, then NON-BLOCKING try the other. If the second
+// fails, release the first and retry in the OTHER ORDER. Either both
+// chopsticks are held together at the moment of `break acquire`, or
+// neither is held at the bottom of the loop body — never one held while
+// some other philosopher waits on it as their first.
+//
+// Compare to the odd/even ring (eat() above):
+//   - Odd/even ring: prevents the cycle STRUCTURALLY in the lock-acquire
+//     graph — odd philosophers go in the opposite direction.
+//   - Try-and-back-off (this): the cycle can briefly form, but the
+//     non-blocking try unwinds it before it actualises. Equivalent to
+//     C++'s std::lock(a,b) / std::scoped_lock{a,b} algorithm.
+//
+// Liveness note: this can LIVELOCK in pathological scheduling — every
+// philosopher grabs their first, every try fails, every philosopher
+// releases and loops. With Go's channel FIFO and scheduler jitter this
+// is rare in practice; production code should add a randomized backoff
+// sleep between iterations to prove livelock impossible.
+//
+// Go syntax used:
+//   - LABELED BREAK: `acquire:` is a label on the for-loop; `break acquire`
+//     escapes the for-loop from inside the select. A bare `break` would
+//     only escape the select case, leaving the for-loop running.
+//   - NON-BLOCKING SELECT: `select { case <-ch: ...; default: ... }` is
+//     the idiom for "try to receive; if you can't right now, do default."
+//     Without `default:`, select blocks until one of the cases is ready.
+
+func eatTryBackoff(s *Shared, pid int) {
+	s.states[pid].Store(Hungry)
+
+	leftCh := s.getLeftChopstickCh(pid)
+	rightCh := s.getRightChopstickCh(pid)
+
+	// ======================================================================
+	// TODO: Acquire both chopsticks via try-and-back-off.
+	// ======================================================================
+acquire:
+	for {
+		<- leftCh
+		select {
+		case <-rightCh:
+			break acquire
+		default:
+
+		}
+		// reload leftCh
+		leftCh <- struct {}{}
+		<- rightCh 
+		select {
+		case <-leftCh:
+			break acquire
+		default:
+		}
+		// reload rigthCh
+		rightCh <- struct{}{}
+
+
+		// --- Phase A: try left-first ---
+		// TODO: blocking receive on leftCh        (`<-leftCh`)
+		// TODO: non-blocking select on rightCh:
+		//         case <-rightCh:    break acquire     // both held — done
+		//         default:                              // give up, fall through
+		// TODO: put leftCh back                   (`leftCh <- struct{}{}`)
+
+		// --- Phase B: try right-first (symmetric) ---
+		// TODO: blocking receive on rightCh
+		// TODO: non-blocking select on leftCh:
+		//         case <-leftCh:     break acquire
+		//         default:
+		// TODO: put rightCh back
+
+		// (Optional: jitter(1) here to break livelock under stress.)
+	}
+
+	s.states[pid].Store(Eating)
+	s.checkInvariant(pid)
+	s.meals[pid].Add(1)
+	jitter(3)
+	s.states[pid].Store(Thinking)
+
+	leftCh <- struct{}{}
+	rightCh <- struct{}{}
+
+	// ======================================================================
+	// TODO: Release both chopsticks (send tokens back into both channels).
 	// ======================================================================
 }
 
@@ -101,6 +231,7 @@ func main() {
 	//     s.chopsticks[i] = make(chan struct{}, 1)
 	//     s.chopsticks[i] <- struct{}{}  // prime each channel with one token
 	// }
+	s.Init()
 
 	var wg sync.WaitGroup
 	start := time.Now()

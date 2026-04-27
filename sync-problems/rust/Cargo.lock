@@ -38,6 +38,7 @@ name = "dining_philosophers"
 version = "0.1.0"
 dependencies = [
  "rand",
+ "tokio",
 ]
 
 [[package]]
