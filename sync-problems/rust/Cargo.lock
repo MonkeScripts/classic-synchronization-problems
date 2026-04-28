@@ -43,6 +43,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fifo_semaphore"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -51,6 +58,14 @@ dependencies = [
  "cfg-if",
  "libc",
  "wasi",
+]
+
+[[package]]
+name = "h2o"
+version = "0.1.0"
+dependencies = [
+ "rand",
+ "tokio",
 ]
 
 [[package]]

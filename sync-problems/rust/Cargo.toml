@@ -6,6 +6,8 @@ members = [
     "barbershop",
     "producer_consumer",
     "readers_writers",
+    "h2o",
+    "fifo_semaphore",
 ]
 
 [workspace.package]
