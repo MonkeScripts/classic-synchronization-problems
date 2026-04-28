@@ -143,11 +143,27 @@ async fn eat_naive(shared: &SharedTokio, pid: usize) {
 async fn eat_asymmetric(shared: &SharedTokio, pid: usize) {
     shared.states[pid].store(HUNGRY, Ordering::SeqCst);
 
-    // TODO: pick (first_idx, second_idx):
-    //         if pid == N - 1: (right=(pid+1)%N, left=pid)   // reversed
-    //         else:            (left=pid, right=(pid+1)%N)   // normal
-    // TODO: let _f = shared.chopsticks[first_idx].lock().await;
-    // TODO: let _s = shared.chopsticks[second_idx].lock().await;
+    // let mut first = pid ;// left
+    // let mut second = (pid + 1) % N; //right
+    // if pid == N-1 {
+    //     first = (pid + 1) % N;
+    //     second = pid;
+    // }
+    // Better representation
+    let (first, second) = if pid == N - 1 {
+        ((pid + 1) % N, pid)
+    } else {
+        (pid, (pid + 1) % N)
+    };
+
+    // Alternative using match
+    // let (first, second) = match pid == N - 1 {
+    //     true => ((pid + 1) % N, pid),
+    //     false => (pid, (pid + 1) % N),
+    // }
+    // A leading underscore in a variable name (e.g., _my_variable) tells the compiler you intentionally left it unused, preventing "unused variable" warnings.
+    let _first_chopstick = shared.chopsticks[first].lock().await;
+    let _second_choptstick = shared.chopsticks[second].lock().await;
 
     shared.states[pid].store(EATING, Ordering::SeqCst);
     shared.check_invariant(pid);
@@ -177,28 +193,39 @@ async fn eat_asymmetric(shared: &SharedTokio, pid: usize) {
 async fn eat_try_backoff(shared: &SharedTokio, pid: usize) {
     shared.states[pid].store(HUNGRY, Ordering::SeqCst);
 
-    let _left = pid;
-    let _right = (pid + 1) % N;
+    let left = pid;
+    let right = (pid + 1) % N;
+    let (_left_guard, _right_guard) = loop {
+        let first_chopstick = shared.chopsticks[left].lock().await;
+        match shared.chopsticks[right].try_lock() {
+            Ok(second_chopstick) => {
+                break(first_chopstick, second_chopstick);
+            },
+            Err(_) => {
+                drop(first_chopstick);
+                println!("Lock is busy, moving on!");
+            },
+        }
+        // drop first_chopstick if we could not take the second chopstick
+        
 
-    // TODO: loop {
-    //   // Phase A: lock left, try right
-    //   let l_guard = shared.chopsticks[left].lock().await;
-    //   match shared.chopsticks[right].try_lock() {
-    //       Ok(r_guard) => {
-    //           // hold both — do the eat (set EATING, check, count, jitter, THINKING)
-    //           // then return; (drop r_guard, l_guard at end of fn — LIFO RAII)
-    //       }
-    //       Err(_) => { drop(l_guard); /* try other order */ }
-    //   }
-    //
-    //   // Phase B: lock right, try left
-    //   let r_guard = shared.chopsticks[right].lock().await;
-    //   match shared.chopsticks[left].try_lock() {
-    //       Ok(l_guard) => { /* eat, return */ }
-    //       Err(_) => { drop(r_guard); /* loop again */ }
-    //   }
-    // }
-    //
+        // swap chopsticks
+        let first_chopstick = shared.chopsticks[right].lock().await;
+        match shared.chopsticks[left].try_lock() {
+            Ok(second_chopstick) => {
+                // println!("Acquired lock: {}", *second_chopstick); Dereferences to () which cant be printed
+                break(first_chopstick, second_chopstick);
+            },
+            Err(_) => {
+                println!("Lock is busy, moving on!");
+                drop(first_chopstick); // redundant because of RAII
+            }
+        }
+
+    };
+    // CHOPSTICK GUARDS stay alive!
+
+
     // Note: the eat-section (states.store(EATING), check_invariant, meals,
     // jitter, states.store(THINKING)) appears inside BOTH match arms.
     // Easiest is to factor it into a helper or just duplicate.
@@ -224,15 +251,14 @@ async fn eat_try_backoff(shared: &SharedTokio, pid: usize) {
 
 async fn eat_footman(shared: &SharedTokio, pid: usize) {
     shared.states[pid].store(HUNGRY, Ordering::SeqCst);
+    let _diner = shared.num_eaters.acquire().await.unwrap();
+    
+    let left = pid;
+    let right = (pid + 1) % N;
+    let _left_chopstick = shared.chopsticks[left].lock().await;
+    let _right_chopstick = shared.chopsticks[right].lock().await;
 
-    // TODO: let _ticket = shared.num_eaters.acquire().await.unwrap();
-    //                     ^ holds the cap-permit until end of scope
 
-    let _left = pid;
-    let _right = (pid + 1) % N;
-
-    // TODO: let _l = shared.chopsticks[_left].lock().await;
-    // TODO: let _r = shared.chopsticks[_right].lock().await;
 
     shared.states[pid].store(EATING, Ordering::SeqCst);
     shared.check_invariant(pid);
@@ -240,8 +266,6 @@ async fn eat_footman(shared: &SharedTokio, pid: usize) {
     jitter(3).await;
     shared.states[pid].store(THINKING, Ordering::SeqCst);
 
-    // _r, _l, _ticket drop in reverse: chopstick R, chopstick L, footman ticket.
-    // (Same LIFO release order as C++ scoped_lock + RAII semaphore-permit.)
 }
 
 // =============================================================================
@@ -264,32 +288,27 @@ async fn eat_footman(shared: &SharedTokio, pid: usize) {
 
 async fn eat_tanenbaum(shared: &SharedTokio, pid: usize) {
     shared.states[pid].store(HUNGRY, Ordering::SeqCst);
-
-    // ===== take_forks =====
-    // TODO: {
-    //   let mut state = shared.algo_states.lock().await;
-    //   state[pid] = HUNGRY;
-    //   shared.tanenbaum_test(&mut state, pid);
-    // } // lock dropped here
-    // TODO: shared.notify[pid].notified().await;
-    //   // either consumes the permit deposited by test_self (Phase A),
-    //   // or blocks until a neighbor's put_forks signals us (Phase B).
-
+    {
+        let mut state = shared.algo_states.lock().await;
+        state[pid] = HUNGRY;
+        shared.tanenbaum_test(&mut state, pid);
+    }
+    shared.notify[pid].notified().await;
     shared.states[pid].store(EATING, Ordering::SeqCst);
     shared.check_invariant(pid);
     shared.meals[pid].fetch_add(1, Ordering::SeqCst);
     jitter(3).await;
     shared.states[pid].store(THINKING, Ordering::SeqCst);
+    {
+        let mut state = shared.algo_states.lock().await;
+        let left_neighbour = (pid + N - 1) % N;
+        let right_neighbour = (pid + 1) % N;
+        state[pid] = THINKING;
+        shared.tanenbaum_test(&mut state, left_neighbour);
+        shared.tanenbaum_test(&mut state, right_neighbour);
+    }
 
-    // ===== put_forks =====
-    // TODO: {
-    //   let mut state = shared.algo_states.lock().await;
-    //   state[pid] = THINKING;
-    //   let left  = (pid + N - 1) % N;
-    //   let right = (pid + 1) % N;
-    //   shared.tanenbaum_test(&mut state, left);
-    //   shared.tanenbaum_test(&mut state, right);
-    // }
+
 }
 
 // =============================================================================
