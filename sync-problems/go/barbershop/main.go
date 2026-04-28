@@ -63,29 +63,18 @@ func NewBarbershop() *Barbershop {
 
 // Customer returns true if served, false if balked.
 func (bs *Barbershop) Customer(id int) bool {
-	// ==========================================================
-	// TODO (version 1, channels):
-	//   select {
-	//   case bs.chairs <- id:
-	//       // sat down — now wait for barber to be ready for ME
-	//       <-bs.barberReady
-	//       // "get haircut" — model with a short sleep
-	//       // tell barber I'm done
-	//       bs.customerDone <- struct{}{}
-	//       // wait for barber to release me
-	//       <-bs.barberDone
-	//       return true
-	//   default:
-	//       return false // balked
-	//   }
-	//
-	// Gotcha: with buffered `chairs`, who *drains* a slot when a customer
-	// leaves? Easiest answer: the BARBER receives from `chairs` in Barber()
-	// to "call the next customer" — don't try to drain from the customer
-	// side; the ordering gets ugly fast.
-	// ==========================================================
-	_ = id
-	return false
+		select {
+		case <- bs.shutdown:
+			return false
+		case bs.chairs <- id:
+			<-bs.barberReady
+			time.Sleep(2 * time.Millisecond) // cut hair
+			<- bs.barberDone
+			bs.customerDone <- struct{}{}
+			return true
+		default:
+			return false //balk
+		}
 }
 
 func (bs *Barbershop) Barber() {
@@ -93,15 +82,13 @@ func (bs *Barbershop) Barber() {
 		select {
 		case <-bs.shutdown:
 			return
-		case id := <-bs.chairs:
-			_ = id
-			// ==========================================================
-			// TODO (version 1, channels):
-			//   - send on bs.barberReady   (customer begins haircut)
-			//   - simulate cutting with a short sleep
-			//   - <-bs.customerDone        (wait for customer's "done")
-			//   - send on bs.barberDone    (release customer)
-			// ==========================================================
+		// case id := <-bs.chairs: UNUSED variables cannot compile
+		case <-bs.chairs:
+			bs.barberReady <- struct{}{}
+			time.Sleep(2 * time.Millisecond) // cut hair
+			bs.barberDone <- struct{}{}
+			<-bs.customerDone
+
 		}
 	}
 }

@@ -35,6 +35,26 @@ public:
     // Returns true if served, false if balked.
     bool customer(int customer_id) {
         (void)customer_id;
+        {
+            std::unique_lock<std::mutex> lk{mut_};
+            if (customers_ ==  CHAIRS) {
+                // balk()
+                return false;
+            }
+            customers_ += 1;
+        }
+        customer_sem_.release();
+        barber_sem_.acquire();
+        std::this_thread::sleep_for(1ms);// getting hair cut()
+        customer_done_sem_.release();
+        barber_done_sem_.acquire();
+
+        {
+            std::unique_lock<std::mutex> lk{mut_};
+            customers_ -= 1;
+        }
+        return true;
+
         // ==========================================================
         // TODO:
         //   - acquire mutex
@@ -49,11 +69,17 @@ public:
         //   - acquire mutex, customers_ -= 1, release mutex
         //   - return true
         // ==========================================================
-        return false; // placeholder
+
     }
 
     void barber() {
-        while (!stop_.load()) {
+        while (true) {
+            customer_sem_.acquire();
+            if (stop_.load()) break;
+            barber_sem_.release();
+            std::this_thread::sleep_for(1ms); // Cut hair
+            customer_done_sem_.acquire();
+            barber_done_sem_.release();
             // ==========================================================
             // TODO:
             //   - wait on customer_sem_  (or check stop_ flag)
@@ -62,7 +88,7 @@ public:
             //   - wait on customer_done_sem_
             //   - signal barber_done_sem_
             // ==========================================================
-            break; // placeholder — remove when implemented
+
         }
     }
 
