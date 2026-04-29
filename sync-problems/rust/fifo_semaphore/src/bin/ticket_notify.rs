@@ -30,10 +30,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 const N_THREADS: usize = 16;
 const INITIAL_COUNT: usize = 0;
 const ARRIVAL_SPACING_MS: u64 = 10;
+const SLOTS: usize = N_THREADS + INITIAL_COUNT + 1;
 
 // ==========================================================================
 // TODO: Implement FifoSemaphore.
@@ -45,21 +47,32 @@ const ARRIVAL_SPACING_MS: u64 = 10;
 //   release():       count += 1; if a waiter is queued, the OLDEST one wakes.
 // ==========================================================================
 pub struct FifoSemaphore {
-    // TODO: fields
+    now_serving: AtomicUsize,
+    next_ticket: AtomicUsize,
+    notify_list: [Notify; SLOTS],
 }
 
 impl FifoSemaphore {
     pub fn new(initial_count: usize) -> Self {
-        let _ = initial_count;
-        Self {}
+        let s = Self {
+            now_serving: AtomicUsize::new(initial_count),
+            next_ticket: AtomicUsize::new(0),
+            notify_list: std::array::from_fn(|_| Notify::new()),
+        };
+        for i in 0..initial_count {
+            s.notify_list[i].notify_one();
+        }
+        s
     }
 
     pub async fn acquire(&self) {
-        // TODO
+        let current_ticket = self.next_ticket.fetch_add(1, Ordering::SeqCst);
+        self.notify_list[current_ticket].notified().await;
     }
 
     pub fn release(&self) {
-        // TODO
+        let finished_ticket = self.now_serving.fetch_add(1, Ordering::SeqCst);
+        self.notify_list[finished_ticket].notify_one();
     }
 }
 
